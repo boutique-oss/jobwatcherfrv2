@@ -1,0 +1,51 @@
+name: Scrape Jobs
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scrape France Travail
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          FT_CLIENT_ID: ${{ secrets.FT_CLIENT_ID }}
+          FT_CLIENT_SECRET: ${{ secrets.FT_CLIENT_SECRET }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          LOCATION: ${{ secrets.LOCATION }}
+        run: python cli.py scrape --source ft
+
+      - name: Scrape WTTJ
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          LOCATION: ${{ secrets.LOCATION }}
+        run: python cli.py scrape --source wttj
+
+      - name: Scrape APEC
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          APEC_API_KEY: ${{ secrets.APEC_API_KEY }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
+          LOCATION: ${{ secrets.LOCATION }}
+        run: python cli.py scrape --source apec
