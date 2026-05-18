@@ -47,7 +47,7 @@ def scrape(
     for src in sources:
         typer.echo(f"Scraping {src}...")
         jobs = _run_source(src)
-        typer.echo(f"  → {len(jobs)} offers fetched")
+        typer.echo(f"  -> {len(jobs)} offres")
         all_jobs.extend(jobs)
 
     if not all_jobs:
@@ -57,7 +57,7 @@ def scrape(
     typer.echo(f"Upserting {len(all_jobs)} offers...")
     stats = upsert_jobs(all_jobs)
     typer.echo(
-        f"Done — {stats['inserted']} new offers inserted, {stats['skipped']} duplicates skipped."
+        f"Done: {stats['inserted']} nouvelles offres inserees, {stats['skipped']} doublons ignores."
     )
 
 
