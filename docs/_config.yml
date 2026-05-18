@@ -1,0 +1,15 @@
+title: Job Watcher FR
+description: Agrégateur d'offres d'emploi — France Travail, WTTJ, APEC
+theme: jekyll-theme-primer
+lang: fr
+
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+
+relative_links:
+  enabled: true
+  collections: true
+
+include:
+  - README.md
