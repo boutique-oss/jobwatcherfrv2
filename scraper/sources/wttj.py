@@ -2,117 +2,143 @@ from __future__ import annotations
 
 import logging
 import os
-import random
-import time
+from datetime import datetime
 from typing import List, Optional
 
 import requests
-from bs4 import BeautifulSoup
 
 from scraper.models import JobOffer
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://www.welcometothejungle.com/fr/jobs"
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "fr-FR,fr;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": "https://www.google.fr/",
-}
-
-# WTTJ est protégé par Cloudflare — le contenu HTML est inaccessible via requests.
-# Pour activer ce scraper, remplacer fetch() par une implémentation Playwright :
-#   pip install playwright && playwright install chromium
-# Cette implémentation BS4 reste en place et retourne [] si le challenge est actif.
+_BASE_URL = "https://www.welcomekit.co/api/v1/external"
+_PAGE_SIZE = 100
 
 
-def _parse_page(html: str, base_url: str = "https://www.welcometothejungle.com") -> List[JobOffer]:
-    soup = BeautifulSoup(html, "html.parser")
-    offers: List[JobOffer] = []
+def _get_api_key() -> Optional[str]:
+    return os.environ.get("WTTJ_API_KEY") or os.environ.get("WK_API_KEY")
 
-    for card in soup.select("[data-testid='search-results-list-item-wrapper']"):
+
+def _parse_salary(salary: Optional[dict]) -> Optional[str]:
+    if not salary:
+        return None
+    parts = []
+    if salary.get("min"):
+        parts.append(str(salary["min"]))
+    if salary.get("max"):
+        parts.append(str(salary["max"]))
+    currency = salary.get("currency", "EUR")
+    period = salary.get("period", "")
+    if parts:
+        return f"{' - '.join(parts)} {currency}/{period}".strip("/").strip()
+    return None
+
+
+def _map_offer(raw: dict) -> Optional[JobOffer]:
+    # L'URL canonique est apply_url ou construite depuis le slug organisation + référence
+    url = raw.get("apply_url") or ""
+    if not url:
+        org = (raw.get("organization") or {}).get("slug", "")
+        ref = raw.get("reference", "")
+        if org and ref:
+            url = f"https://www.welcometothejungle.com/fr/companies/{org}/jobs/{ref}"
+    if not url:
+        return None
+
+    posted_at: Optional[datetime] = None
+    if date_str := raw.get("published_at") or raw.get("created_at"):
         try:
-            title_el = card.select_one("[data-testid='job-title']") or card.select_one("h3")
-            title = title_el.get_text(strip=True) if title_el else ""
+            posted_at = datetime.fromisoformat(date_str.rstrip("Z"))
+        except ValueError:
+            pass
 
-            company_el = card.select_one("[data-testid='company-name']") or card.select_one("span[class*='company']")
-            company: Optional[str] = company_el.get_text(strip=True) if company_el else None
+    salary_str = _parse_salary(raw.get("salary"))
 
-            location_el = card.select_one("[data-testid='job-location']") or card.select_one("span[class*='location']")
-            location: Optional[str] = location_el.get_text(strip=True) if location_el else None
+    company: Optional[str] = None
+    if org_data := raw.get("organization"):
+        company = org_data.get("name")
 
-            contract_el = card.select_one("[data-testid='job-contract-type']")
-            contract_type: Optional[str] = contract_el.get_text(strip=True) if contract_el else None
+    location: Optional[str] = None
+    if office := raw.get("office"):
+        city = office.get("city") or ""
+        country = office.get("country") or ""
+        location = f"{city}, {country}".strip(", ") or None
 
-            link_el = card.select_one("a[href]")
-            href: str = link_el["href"] if link_el else ""
-            url = href if href.startswith("http") else f"{base_url}{href}"
-
-            if not url or not title:
-                continue
-
-            offers.append(
-                JobOffer(
-                    url=url,
-                    source="wttj",
-                    title=title,
-                    company=company,
-                    location=location,
-                    contract_type=contract_type,
-                )
-            )
-        except Exception as exc:
-            logger.debug("WTTJ card parse error: %s", exc)
-
-    return offers
+    return JobOffer(
+        url=url,
+        source="wttj",
+        title=raw.get("name", ""),
+        company=company,
+        location=location,
+        contract_type=raw.get("contract_type"),
+        salary=salary_str,
+        description=raw.get("description") or raw.get("profile"),
+        posted_at=posted_at,
+        raw_data=raw,
+    )
 
 
 def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> List[JobOffer]:
-    kw = keywords or os.environ.get("KEYWORDS", "")
-    loc = location or os.environ.get("LOCATION", "")
+    api_key = _get_api_key()
+    if not api_key:
+        logger.error(
+            "WTTJ_API_KEY manquant. Demander un token sur contact@welcomekit.co "
+            "ou via le portail partenaire WTTJ."
+        )
+        return []
 
-    params: dict = {}
-    if kw:
-        params["query"] = kw
-    if loc:
-        params["aroundQuery"] = loc
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+    }
 
     results: List[JobOffer] = []
     page = 1
 
-    while page <= 5:
+    while True:
+        params: dict = {
+            "status": "published",
+            "per_page": _PAGE_SIZE,
+            "page": page,
+            "office": "true",
+            "organization": "true",
+        }
+
         try:
             resp = requests.get(
-                _BASE_URL,
-                headers=_HEADERS,
-                params={**params, "page": page},
+                f"{_BASE_URL}/jobs/all",
+                headers=headers,
+                params=params,
                 timeout=20,
             )
+            resp.raise_for_status()
+            data = resp.json()
         except Exception as exc:
-            logger.error("WTTJ request error (page %d): %s", page, exc)
+            logger.error("WTTJ API error (page %d): %s", page, exc)
             break
 
-        # 202 = Cloudflare challenge — bot détecté, contenu non rendu
-        if resp.status_code == 202 or len(resp.text) < 5000:
-            logger.warning(
-                "WTTJ: protection bot détectée (HTTP %d, %d bytes). "
-                "Activer Playwright pour contourner. Retour vide.",
-                resp.status_code, len(resp.text),
-            )
+        jobs_page = data if isinstance(data, list) else data.get("data", data.get("jobs", []))
+        if not jobs_page:
             break
 
-        offers = _parse_page(resp.text)
-        if not offers:
+        for raw in jobs_page:
+            offer = _map_offer(raw)
+            if offer:
+                results.append(offer)
+
+        # Filtrage local par mot-clé si pas de filtre API disponible
+        if keywords and page == 1:
+            kw = keywords.lower()
+            results = [
+                j for j in results
+                if kw in j.title.lower() or kw in (j.description or "").lower()
+            ]
+
+        # Arrêt si la page est incomplète (dernière page)
+        if len(jobs_page) < _PAGE_SIZE:
             break
 
-        results.extend(offers)
         page += 1
-        time.sleep(random.uniform(1, 3))
 
     logger.info("WTTJ: fetched %d offers", len(results))
     return results

@@ -30,10 +30,12 @@ foreach ($name in $required) {
     Write-Host "OK  $name" -ForegroundColor Green
 }
 
-# APEC optionnel
-if ($secrets.ContainsKey("APEC_API_KEY") -and $secrets["APEC_API_KEY"]) {
-    $secrets["APEC_API_KEY"] | gh secret set APEC_API_KEY --repo $repo
-    Write-Host "OK  APEC_API_KEY" -ForegroundColor Green
+# Optionnels
+foreach ($opt in @("APEC_API_KEY", "WTTJ_API_KEY")) {
+    if ($secrets.ContainsKey($opt) -and $secrets[$opt]) {
+        $secrets[$opt] | gh secret set $opt --repo $repo
+        Write-Host "OK  $opt" -ForegroundColor Green
+    }
 }
 
-Write-Host "`nSecrets configurés sur $repo" -ForegroundColor Cyan
+Write-Host "`nSecrets configures sur $repo" -ForegroundColor Cyan

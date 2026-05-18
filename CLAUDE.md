@@ -25,6 +25,7 @@
 | `FT_CLIENT_ID` | OAuth2 France Travail |
 | `FT_CLIENT_SECRET` | OAuth2 France Travail |
 | `APEC_API_KEY` | Clé API APEC (optionnelle) |
+| `WTTJ_API_KEY` | Token Bearer WelcomeKit API (contacter contact@welcomekit.co) |
 | `KEYWORDS` | Mots-clés de recherche |
 | `LOCATION` | Code commune ou département |
 

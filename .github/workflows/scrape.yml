@@ -36,6 +36,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          WTTJ_API_KEY: ${{ secrets.WTTJ_API_KEY }}
           KEYWORDS: ${{ secrets.KEYWORDS }}
           LOCATION: ${{ secrets.LOCATION }}
         run: python cli.py scrape --source wttj
