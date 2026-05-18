@@ -64,39 +64,29 @@ def scrape(
 @app.command()
 def stats() -> None:
     """Show offer counts per source and last scrape date."""
-    from dotenv import load_dotenv
-    from supabase import create_client
-
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        typer.echo("SUPABASE_URL and SUPABASE_KEY are required.", err=True)
-        raise typer.Exit(1)
-
-    client = create_client(url, key)
+    from scraper.storage.supabase_client import count_by_source, get_last_scraped
 
     for src in ("france_travail", "wttj", "apec"):
-        resp = client.table("jobs").select("scraped_at").eq("source", src).order("scraped_at", desc=True).limit(1).execute()
-        count_resp = client.table("jobs").select("url", count="exact").eq("source", src).execute()
-        count = count_resp.count or 0
-        last = resp.data[0]["scraped_at"] if resp.data else "never"
-        typer.echo(f"{src:15s} {count:>5} offers   last: {last}")
+        count = count_by_source(src)
+        last = get_last_scraped(src)
+        typer.echo(f"{src:15s} {count:>5} offres   dernière collecte: {last[:19] if last != 'jamais' else last}")
 
 
 @app.command(name="reset-read")
 def reset_read() -> None:
     """Reset is_read=False on all job offers."""
-    from supabase import create_client
+    import requests as req
+    from scraper.storage.supabase_client import _get_config, _headers
 
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-    if not url or not key:
-        typer.echo("SUPABASE_URL and SUPABASE_KEY are required.", err=True)
-        raise typer.Exit(1)
-
-    client = create_client(url, key)
-    client.table("jobs").update({"is_read": False}).neq("is_read", None).execute()
-    typer.echo("All offers marked as unread.")
+    url, key = _get_config()
+    req.patch(
+        f"{url}/rest/v1/jobs",
+        json={"is_read": False},
+        headers={**_headers(key), "Prefer": "return=minimal"},
+        params={"is_read": "eq.true"},
+        timeout=15,
+    ).raise_for_status()
+    typer.echo("Toutes les offres remises en 'non lu'.")
 
 
 if __name__ == "__main__":

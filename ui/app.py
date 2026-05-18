@@ -1,31 +1,63 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
+import requests
 import streamlit as st
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 load_dotenv()
 
 st.set_page_config(page_title="Job Scraper", page_icon="💼", layout="wide")
 
 
-@st.cache_resource
-def get_client() -> Client:
-    url = os.environ["SUPABASE_URL"]
+def _sb_headers() -> dict:
     key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
 
 
-def mark_read(client: Client, job_url: str) -> None:
-    client.table("jobs").update({"is_read": True}).eq("url", job_url).execute()
+def _sb_url() -> str:
+    return os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1"
+
+
+@st.cache_data(ttl=30)
+def fetch_jobs(sources: tuple, unread_only: bool, contract_filter: str) -> list[dict]:
+    params: dict[str, Any] = {
+        "source": f"in.({','.join(sources)})",
+        "order": "scraped_at.desc",
+        "limit": 500,
+    }
+    if unread_only:
+        params["is_read"] = "eq.false"
+    if contract_filter:
+        params["contract_type"] = f"ilike.*{contract_filter}*"
+
+    resp = requests.get(
+        f"{_sb_url()}/jobs",
+        headers=_sb_headers(),
+        params=params,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def mark_read(job_url: str) -> None:
+    requests.patch(
+        f"{_sb_url()}/jobs",
+        json={"is_read": True},
+        headers={**_sb_headers(), "Prefer": "return=minimal"},
+        params={"url": f"eq.{job_url}"},
+        timeout=10,
+    ).raise_for_status()
 
 
 def main() -> None:
-    client = get_client()
-
-    # --- sidebar filters ---
     with st.sidebar:
         st.title("Filtres")
         sources = st.multiselect(
@@ -36,15 +68,15 @@ def main() -> None:
         show_unread_only = st.checkbox("Non lues uniquement", value=False)
         contract_filter = st.text_input("Type de contrat (ex: CDI)")
 
-    # --- fetch data ---
-    query = client.table("jobs").select("*").in_("source", sources).order("scraped_at", desc=True)
-    if show_unread_only:
-        query = query.eq("is_read", False)
-    if contract_filter:
-        query = query.ilike("contract_type", f"%{contract_filter}%")
+    if not sources:
+        st.warning("Sélectionne au moins une source.")
+        return
 
-    response = query.execute()
-    jobs = response.data or []
+    try:
+        jobs = fetch_jobs(tuple(sources), show_unread_only, contract_filter)
+    except Exception as exc:
+        st.error(f"Erreur Supabase : {exc}")
+        return
 
     total = len(jobs)
     unread = sum(1 for j in jobs if not j.get("is_read"))
@@ -61,9 +93,9 @@ def main() -> None:
         with st.container():
             col1, col2 = st.columns([9, 1])
             with col1:
-                read_badge = "" if job.get("is_read") else "🔵 "
+                badge = "" if job.get("is_read") else "🔵 "
                 st.markdown(
-                    f"{read_badge}**[{job['title']}]({job['url']})** — "
+                    f"{badge}**[{job['title']}]({job['url']})** — "
                     f"{job.get('company') or '—'} | "
                     f"{job.get('location') or '—'} | "
                     f"{job.get('contract_type') or '—'} | "
@@ -74,7 +106,8 @@ def main() -> None:
             with col2:
                 if not job.get("is_read"):
                     if st.button("Lu ✓", key=f"read_{job['url']}"):
-                        mark_read(client, job["url"])
+                        mark_read(job["url"])
+                        st.cache_data.clear()
                         st.rerun()
         st.divider()
 
