@@ -19,13 +19,13 @@ _PAGE_SIZE = 150
 def _get_token(client_id: str, client_secret: str) -> str:
     resp = requests.post(
         _TOKEN_URL,
+        params={"realm": "/partenaire"},
         data={
             "grant_type": "client_credentials",
             "client_id": client_id,
             "client_secret": client_secret,
             "scope": "api_offresdemploiv2 o2dsoffre",
         },
-        params={"realm": "/partenaire"},
         timeout=15,
     )
     resp.raise_for_status()
@@ -58,6 +58,19 @@ def _map_offer(raw: dict) -> JobOffer:
     )
 
 
+def _location_to_dept(location: str) -> str:
+    """Convert INSEE commune code or free text to a 2-3 digit departement code."""
+    loc = location.strip()
+    # Si c'est un code commune INSEE à 5 chiffres (ex: 75056), extraire les 2 premiers
+    if loc.isdigit() and len(loc) == 5:
+        return loc[:2]
+    # Déjà un code département (75, 69, 13, 971...)
+    if loc.isdigit() and len(loc) in (2, 3):
+        return loc
+    # Texte libre — on ne filtre pas par département
+    return ""
+
+
 def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> List[JobOffer]:
     client_id = os.environ.get("FT_CLIENT_ID")
     client_secret = os.environ.get("FT_CLIENT_SECRET")
@@ -78,17 +91,21 @@ def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> Lis
     results: List[JobOffer] = []
     start = 0
 
+    dept = _location_to_dept(loc)
+
     while True:
         end = start + _PAGE_SIZE - 1
         params: dict = {"range": f"{start}-{end}"}
         if kw:
             params["motsCles"] = kw
-        if loc:
-            params["commune"] = loc
+        if dept:
+            params["departement"] = dept
 
         try:
             resp = requests.get(_SEARCH_URL, headers=headers, params=params, timeout=20)
-            resp.raise_for_status()
+            # 206 Partial Content = résultats OK (réponse normale de l'API FT v2)
+            if resp.status_code not in (200, 206):
+                resp.raise_for_status()
             data = resp.json()
         except Exception as exc:
             logger.error("France Travail search error (range %d-%d): %s", start, end, exc)
@@ -97,8 +114,8 @@ def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> Lis
         offers = data.get("resultats", [])
         results.extend(_map_offer(o) for o in offers)
 
-        content_range = resp.headers.get("Content-Range", "")
         # Content-Range: offres 0-149/1234
+        content_range = resp.headers.get("Content-Range", "")
         try:
             total = int(content_range.split("/")[-1])
         except (ValueError, IndexError):

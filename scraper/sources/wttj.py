@@ -5,7 +5,6 @@ import os
 import random
 import time
 from typing import List, Optional
-from urllib.parse import quote_plus
 
 import requests
 from bs4 import BeautifulSoup
@@ -23,7 +22,13 @@ _HEADERS = {
     ),
     "Accept-Language": "fr-FR,fr;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.google.fr/",
 }
+
+# WTTJ est protégé par Cloudflare — le contenu HTML est inaccessible via requests.
+# Pour activer ce scraper, remplacer fetch() par une implémentation Playwright :
+#   pip install playwright && playwright install chromium
+# Cette implémentation BS4 reste en place et retourne [] si le challenge est actif.
 
 
 def _parse_page(html: str, base_url: str = "https://www.welcometothejungle.com") -> List[JobOffer]:
@@ -80,7 +85,7 @@ def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> Lis
     results: List[JobOffer] = []
     page = 1
 
-    while page <= 5:  # cap at 5 pages to be respectful
+    while page <= 5:
         try:
             resp = requests.get(
                 _BASE_URL,
@@ -88,9 +93,17 @@ def fetch(keywords: Optional[str] = None, location: Optional[str] = None) -> Lis
                 params={**params, "page": page},
                 timeout=20,
             )
-            resp.raise_for_status()
         except Exception as exc:
             logger.error("WTTJ request error (page %d): %s", page, exc)
+            break
+
+        # 202 = Cloudflare challenge — bot détecté, contenu non rendu
+        if resp.status_code == 202 or len(resp.text) < 5000:
+            logger.warning(
+                "WTTJ: protection bot détectée (HTTP %d, %d bytes). "
+                "Activer Playwright pour contourner. Retour vide.",
+                resp.status_code, len(resp.text),
+            )
             break
 
         offers = _parse_page(resp.text)
